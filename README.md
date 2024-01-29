@@ -1,26 +1,20 @@
-# RNA-seq pipeline
+# Whole-Genome Sequencing (WGS) Pipeline
 
-Excited to work with RNA-seq data? 
-
-This repository includes everything you need for genome mapping. Raw FASTQ files serve as input and undergo genome alignment to a reference. We will go through this process step by step using the T2T and hg38 references.
-
-<img width="531" alt="Screenshot 2023-12-04 at 3 32 06 PM" src="https://github.com/emmarklein/RNAseq_pipeline/assets/152921397/41d26ea8-7045-4986-8ec6-e24e0dffa237">
-
-https://hbctraining.github.io/Intro-to-rnaseq-hpc-O2/lessons/03_alignment.html
+This repository includes everything you need to work with WGS data. Raw FASTQ files serve as input and undergo genome alignment to a reference. We will go through this process step by step using the T2T and hg38 references.
 
 ## SRA download and splitting
-Let’s start with raw FASTQ files (.fastq). FASTQ files contain our sequencing information. We can download Sequence Read Archive (SRA) data from: https://www.ncbi.nlm.nih.gov/sra. This site stores raw sequencing data and alignment information. I will be using SRR8615934 as example data!
+Let’s start with raw FASTQ files (.fastq). FASTQ files contain our sequencing information. We can download Sequence Read Archive (SRA) data from: https://www.ncbi.nlm.nih.gov/sra. This site stores raw sequencing data and alignment information. I will be using SRR8670768 as example data!
 
 ```
 module load sratoolkit
-prefetch --max-size 1000000000000 --force all -q SRR8615934
+prefetch --max-size 1000000000000 --force all -q SRR8670768
 ```
 
 The output should be the complete .SRA file from the site above. Next, we need to split the SRA file because it includes paired-end reads. Let’s continue using sratoolkit! 
 
 ```
 module load sratoolkit
-fastq-dump --split-files --gzip -O /your/path/SRR8615934 /your/path/SRR8615934/SRR8615934.sra
+fastq-dump --split-files --gzip -O /your/path/SRR8670768 /your/path/SRR8670768/SRR8670768.sra
 ```
 
 ## Decompressing fastq.gz
@@ -28,54 +22,54 @@ fastq-dump --split-files --gzip -O /your/path/SRR8615934 /your/path/SRR8615934/S
 Both reads (SRR8670768_1.fastq.gz and SRR8670768_2.fastq.gz) need to be decompressed! We can use gunzip for this step.
 
 ```
-gunzip -c /your/path/SRR8615934_1.fastq.gz > /your/path/SRR8615934_1.fastq
-gunzip -c /your/path/SRR8615934_2.fastq.gz > /your/path/SRR8615934_2.fastq
+gunzip -c /your/path/SRR8670768_1.fastq.gz > /your/path/SRR8670768_1.fastq
+gunzip -c /your/path/SRR8670768_2.fastq.gz > /your/path/SRR8670768_2.fastq
 ```
 
 Now, we finally have our unzipped raw fastq files!
 
-## Building a STAR Index
+## FastQC
 
-Before we map the reads, we must build a genome index. Let's use the T2T reference with the reference genome FASTA file (GCF_009914755.1_T2T-CHM13v2.0_genomic.fna).
-
-```
-module load star
-STAR --runThreadN 8 --runMode genomeGenerate --genomeDir /your/path/T2T_genomeDir --genomeFastaFiles /your/path/GCF_009914755.1_T2T-CHM13v2.0_genomic.fna
-```
-This command builds the index from the reference file and stores the genome index files in the directory, T2T_genomeDir. We can also do this with the hg38 reference and store the index files in /GRCh38_genomeDir.
+FastQC can be used for quality control checks of the high throughput data and eliminated poor quality reads.
 
 ```
-module load star
-STAR --runThreadN 8 --runMode genomeGenerate --genomeDir /your/path/GRCh38_genomeDir --genomeFastaFiles /your/path/GRCh38.primary_assembly.genome.fa
+module load fastqc/0.12.1
+fastqc -o /your/path/fastqc_output /your/path/SRR8670768_2.fastq
 ```
 
-## STAR Alignment
+## Trimgalore!
 
-Now, we are ready for alignment! STAR Aligner determines locations in the human genome associated with read data. This alignment strategy is highly accurate and outperforms other aligners in mapping speed. 
-
-The STAR alignment algorithm includes two main steps: 
-(1) Seed searching 
-(2) Clustering, stitching, and scoring. 
-
-In seed searching, STAR aligns reads with the longest sequence that matches one or more locations on the reference genome. Seeds are different parts of a particular read that are mapped separately to different genomic locations. This alignment method is sequential – STAR continues to search for unmapped sections of each read that matches the reference genome. STAR uses an uncompressed suffix array to search for the longest matches. Separate seeds are combined to create a full read by clustering, stitching, and scoring. 
+Let's use trim_galore to trim the reads by removing adapter sequences. This command uses the zipped version of the fastq files, but you can also run this with unzipped fastq files!
 
 ```
-module load star
-STAR --runThreadN 8 --genomeDir /your/path/T2T_genomeDir/ --outFileNamePrefix SRR8615934_ --readFilesIn /your/path/SRR8615934_1.fastq /your/path/SRR8615934_2.fastq
-STAR --runThreadN 8 --genomeDir /your/path/GRCh38_genomeDir/ --outFileNamePrefix SRR8615934_hg_ --readFilesIn /your/path/SRR8615934_1.fastq /your/path/SRR8615934_2.fastq
+module load trim_galore/0.6.7
+module load cutadapt/4.4
+trim_galore --paired -q 24 --fastqc -o /your/path/SRR8670768_trimmed_new /your/path/SRR8670768_1.fastq.gz /your/path/SRR8670768_2.fastq.gz
 ```
 
-These commands use the index files (in T2T_genomeDir and GRCh38_genomeDir) and FASTQ files for STAR alignment. The output of STAR aligner is read counts per gene! Specifically, we have a SAM file (Sequence Alignment/Map), which are text files that contain alignment information.
+## Burrows-Wheeler Alignment (BWA)
 
-## Filtering (Optional)
-
-Let's filter out the reads that are not meeting our quality threshold (q flag). Also, add -h to keep the header!!
+The first step of using BWA is to make an index of the reference genome in fasta format. We can use bwa index!
 
 ```
-module load samtools
-samtools view -h -q 30 /your/path/SRR8615934_Aligned.out.sam > SRR8615934_filtered.sam
+module load bwa/0.7.17
+bwa index -p bwa_hg_index /your/path/GRCh38.primary_assembly.genome.fa
+bwa index -p bwa_t2t_index /your/path/GCF_009914755.1_T2T-CHM13v2.0_genomic.fna
 ```
-Awesome! We can do a LOT with this information. For now, let's try making wiggle tracks to visualize the data.
+
+Now, we can do alignment with bwa mem!
+
+```
+module load bwa-mem2/2.2.1
+module load bwa-meth/0.2.4
+
+#bwa for hg38
+bwa mem -t 4 bwa_hg_index /your/path/SRR8670768_1_trimmed.fq /your/path/SRR8670768_2_trimmed.fq -o /your/path/bwa_mem_hg38.sam
+
+#bwa for t2t
+bwa mem -t 4 bwa_t2t_index /your/path/SRR8670768_1_trimmed.fq /your/path/SRR8670768_2_trimmed.fq -o /your/path/bwa_mem_t2t.sam                                                      
+```
+The output of BWA is SAM files (Sequence Alignment/Map), which are text files that contain alignment information. We can do a LOT with these files!
 
 ## Wiggle Tracks
 
@@ -83,10 +77,12 @@ To visualize our data, we can create wiggle tracks to upload to UCSC genome brow
 
 ## SAM to BAM
 
+We can convert SAM files into Binary Alignment Map (BAM) files with samtools. BAM files are essentially compressed SAM files that can be used to make wiggle tracks!
+
 ```
 module load samtools
-samtools view -bS /your/path/SRR8615934_hg_Aligned.out.sam > /your/path/SRR8615934_hg_Aligned.out.bam
-samtools view -bS /your/path/SRR8615934_hg_filtered.sam > /your/path/SRR8615934_hg_filtered.bam
+samtools view -bS /your/path/bwa_mem_hg38.sam > /your/path/bwa_mem_hg38.bam
+samtools view -bS /your/path/bwa_mem_t2t.sam > /your/path/bwa_mem_t2t.bam
 ```
 
 ## BAM to BED
@@ -327,22 +323,6 @@ with open(header + ".wig", "w") as outfile:
 
 The .wig files can be uploaded to the [UCSC Genome Browser](https://genome.ucsc.edu/cgi-bin/hgCustom?hgsid=1804009504_57IfGr7IsksWm32NIHRQkaBNJSFc) for visualization. 
 
-## FeatureCounts to find read counts
-
-You can use any annotation file to get specific counts for genes, lncRNA, whatever your heart desires! Make sure you module load subread before running FeatureCounts! 
-
-```
-#!/bin/bash
-## Example with GRChg38 reference
-sbatch -t 4:00:00 --wrap="featureCounts -p --countReadPairs -a gencode.v38.long_noncoding_RNAs.gtf -o /your/path/SRR8615934_hg_Aligned.out.bam.txt /proj/brunklab/users/emma/strands/SRR8615934_hg_Aligned.out.bam"
-```
-
-The output should be text files with read count info in the last column :) have fun with that!
-
-
 ## Acknowledgements
 
 Written by Emma Klein. The pipeline was constructed with the help of Quinn Eberhard.
-
-
-
